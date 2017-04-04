@@ -17,7 +17,7 @@ from oauthlib.oauth2 import BackendApplicationClient
 from requests_oauthlib.oauth2_session import OAuth2Session
 
 
-class DomoData:
+class DomoDataset:
     """Methods for fetching, creating, listing and updating Domo Datasets.
 
         DataSet APIs
@@ -55,23 +55,18 @@ class DomoData:
     _domo = None
     _token = None
     domoHeaders = {'Content-Type': 'text/csv'}
-    ds_endpoint = None
     # base url for backwards compatible concat
     # domoDataApiBase = 'https://api.domo.com/v1/datasets/'
 
     def __init__(self, clientId, clientSecret):
         """Configure Backend Client."""
-        self.meta_string = {}
-        self.csv_dataset = None
-        self.update_endpoint = None
-        self.input_is_df = False
-        self._set_client(client_id=clientId, client_secret=clientSecret)
+        self._set_client(client_id=clientId)
         self._get_token(client_id=clientId, client_secret=clientSecret)
 
     def _set_client(self, client_id):
         """Create Server backend client for Domo API connection."""
         self._client = BackendApplicationClient(client_id=client_id)
-        self._domo = OAuth2Session(client=self.client)
+        self._domo = OAuth2Session(client=self._client)
 
     def _get_token(self, client_id, client_secret):
         """Authenticate with Domo API."""
@@ -146,6 +141,7 @@ class DomoData:
             - **date_parse**: *bool*
                 increase amount of fields infered as date/datetime.
         """
+        dataset_id = None
         meta_json_dict = {}
         if col_dtypes_dict is not None:
             meta_json_dict = self.create_meta_string_from_user_declared(
@@ -157,63 +153,83 @@ class DomoData:
             pass
 
         url = 'https://api.domo.com/v1/datasets/'
-        create_ds = self._domo.post(url=url, json=self.meta_string)
+        create_ds = self._domo.post(url=url, json=meta_json_dict)
         if create_ds.status_code is 201:
             print("Dataset Created")
-            # return response body?
+            res_body = create_ds.text
+            res = json.loads(res_body)
+            dataset_id = res['id']
+            # store as var and return response body at the end?
         else:
             print(
                 f"Dataset creation failed. {create_ds.status_code} {create_ds.reason}")
+        
+        # upload dataframe or passed in csv string
+        if dataframe != None:
+            dataset = dataframe.to_csv(index=False, header=False)
+        else:
+            dataset = data
+        
+        if dataset_id != None:
+            self.replace_ds(dataset_id=dataset_id, data=dataset)
+            
 
-    def update_dataset_meta(self, ds_name, ds_desc, data=None, date_parse=False):
+
+    def update_dataset_meta(self, dataset_id, ds_name, ds_desc, dataframe=None, col_dtypes_dict=None):
         """Update Domo Dataset Schema.
 
             Parameters
             ----------
+            - **dataset_id**: *str*
+                Id for Domo DataSet to Update Schema
             - **ds_name**: *str*
                 name for Domo DataSet.
             - **ds_descr**: *str*
                 description for Domo DataSet.
-            - **data**: *dict*
-                data to infer schema from.
-            - **date_parse**: *bool*
-                increase amount of fields infered as date/datetime.
+            - **dataframe**: *df*
+                dataframe to infer schema from.
+            - **col_dtypes_dict**: *dict*
+                user declared column name/data type pairs to use for schema.
         """
-        self.get_dataset_id()
-        self.create_meta_string(ds_name, ds_desc, data, date_parse)
-        update_meta_request = self._domo.put(
-            self.update_endpoint, json=self.meta_string)
+        if dataframe != None:
+            meta_dict = self.create_meta_string_from_dataframe(ds_name=ds_name,ds_descr=ds_desc,dataframe=dataframe)
+        elif col_dtypes_dict != None:
+            meta_dict = self.create_meta_string_from_user_declared(ds_name=ds_name, ds_descr=ds_desc, col_types_dict=col_dtypes_dict)
+        else:
+            print("Pass in dict of column names and datatypes or a dataframe to infer column types from")
+
+        url = f'https://api.domo.com/v1/datasets/{dataset_id}/'
+        update_meta_request = self._domo.put(url=url, json=meta_dict)
         if update_meta_request.status_code is 200:
             print("Metadata Updated")
         else:
-            print("Metadata Update Failed")
+            print(f"Metadata Update Failed. {update_meta_request.status_code} {update_meta_request.reason}")
 
-    def replace_ds(self, ds_name, ds_descr, data=None, date_parse=False):
+    def replace_ds(self, dataset_id, data=None, dataframe=None):
         """Update (replace) a dataset in Domo or create if it doesn't already exist.
 
             Parameters
             ----------
-            - **ds_name**: *str*
-                name for Domo DataSet.
-            - **ds_descr**: *str*
-                description for Domo DataSet.
-            - **data**: *dict*
-                data to infer schema from.
-            - **date_parse**: *bool*
-                increase amount of fields infered as date/datetime.
+            - **dataset_id**: *str*
+                Id for Domo DataSet to upload replacement data.
+            - **data**: *str*
+                csv string of data to upload.
+            - **dataframe**: *df*
+                pandas dataframe to upload to domo instead of passing csv string.
         """
-        self.get_dataset_id()
-        self.update_dataset_meta(ds_name, ds_descr, data, date_parse)
-        if self.ds_endpoint != None:
-            data_push = self._domo.put(
-                self.ds_endpoint, data=self.csv_dataset, headers=self.domoHeaders)
-            if data_push.status_code == 204:
-                print("Replace Sucessful")
-            else:
-                print(
-                    f'Update Failed. {data_push.status_code} {data_push.reason}')
+        if dataframe != None:
+            dataset = dataframe.to_csv(index=False,header=False)
         else:
-            print("No Endpoint Configured for Dataset")
+            dataset = data
+
+        url = f'https://api.domo.com/v1/datasets/{dataset_id}/data'
+        data_push = self._domo.put(url=url, data=dataset, headers=self.domoHeaders)
+        if data_push.status_code is 204:
+            print("Replace Sucessful")
+        else:
+            print(
+                f'Update Failed. {data_push.status_code} {data_push.reason}')
+        
 
     def list_datasets(self, limit=50, offset=0, sort="name"):
         """Query Domo API for list of Datasets, returns dict upon success.
@@ -307,10 +323,6 @@ class DomoData:
             print(
                 f'Failed to delete PDP {pdp_id}. {remove_pdp.status_code} {remove_pdp.reason}')
 
-    def get_dataset_id(self):
-        """Get dataset Id or create dataset if it doesn't exist in Domo."""
-        # TODO: Query Dataset List, Search for Dataset
-        pass
 
     def create_meta_string_from_dataframe(self, ds_name, ds_descr, dataframe):
         """Create Columns type, name list for Domo Schema based on Dataframe dtypes."""
@@ -372,14 +384,3 @@ class DomoData:
             pdp_json_dict['groups'] = groups
 
         return pdp_json_dict
-
-    def set_dataset_endpoint(self, dataset_id):
-        """Configure enpoint to use for fetching or updating a dataset."""
-        self.ds_endpoint = self.domoDataApiBase + dataset_id + '/data'
-        self.update_endpoint = self.domoDataApiBase + dataset_id
-
-    def set_dataframe(self, dataframe):
-        """Set df to Upload to Domo."""
-        self.df = dataframe
-        self.csv_dataset = dataframe.to_csv(index=False, header=False)
-        self.input_is_df = True
