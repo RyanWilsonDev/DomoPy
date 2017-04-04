@@ -137,9 +137,11 @@ class DomoDataset:
             - **ds_descr**: *str*
                 description for Domo DataSet.
             - **data**: *dict*
-                data to infer schema from.
-            - **date_parse**: *bool*
-                increase amount of fields infered as date/datetime.
+                csv string of data to upload to created dataset.
+            - **dataframe**: *df*
+                dataframe to upload to created dataset instead of csv string.
+            - **col_dtypes_dict**: *dict*
+                dict of column names and types for user to explicitly declare dtypes in Domo
         """
         dataset_id = None
         meta_json_dict = {}
@@ -274,6 +276,53 @@ class DomoDataset:
                 f'DataSet Failed to be removed. {deleteDataSet.status_code} {deleteDataSet.reason}')
             #print("DataSet Failed to be removed")
 
+    def create_meta_string_from_dataframe(self, ds_name, ds_descr, dataframe):
+        """Create Columns type, name list for Domo Schema based on Dataframe dtypes."""
+        df_domo_types = {'object': "STRING", 'int64': "LONG", 'int32': "LONG",
+                         'float64': "DOUBLE", 'float32': "DOUBLE", 'float': "DOUBLE",
+                         'datetime64[ns]': "DATE", 'datetime64[ns, tz]': "DATETIME",
+                         'bool': "STRING"}
+
+        columns = []
+        for col in dataframe.columns:
+            col_type = df_domo_types.get(str(dataframe[col].dtype), "STRING")
+            columns.append({"type": col_type, "name": col})
+
+        meta_json_dict = {}
+        meta_json_dict['name'] = ds_name
+        meta_json_dict['description'] = ds_descr
+        meta_json_dict['rows'] = 0
+        meta_json_dict['schema'] = {"columns": columns}
+
+        return meta_json_dict
+
+    def create_meta_string_from_user_declared(self, ds_name, ds_descr, col_types_dict):
+        """Create metadata from user declared dict of key/value column/type pairs."""
+        # set of allowed data types for Domo Metadata
+        valid_domo_types = ["STRING", "DOUBLE", "DATE", "DATETIME", "LONG"]
+        #valid_domo_types = set(domo_types)
+        # types user passed in
+        types_for_dataset = set(col_types_dict.values())
+        # make sure user passed in types are valid Domo Metadata types.
+        for dtype in types_for_dataset:
+            if dtype not in valid_domo_types:
+                raise ValueError(
+                    f"{dtype} is not a valid datatype to use for creating a Domo Dataset")
+        # Create dict of meta for json req.
+        meta_json_dict = {}
+        meta_json_dict['name'] = ds_name
+        meta_json_dict['description'] = ds_descr
+        meta_json_dict['rows'] = 0
+        meta_json_dict['schema'] = {"columns": [
+            {"name": k, "type": v} for k, v in col_types_dict.items()]}
+
+        return meta_json_dict
+
+    def create_meta_string_from_json_data():
+        """Create metadata with data types infered from json."""
+        pass
+
+
     def create_pdp(self, dataset_id, policy_name, user_ids, group_ids, filters, type):
         """Create PDP policy on specified dataset."""
         url = f'https://api.domo.com/v1/datasets/{dataset_id}/policies'
@@ -322,53 +371,6 @@ class DomoDataset:
         else:
             print(
                 f'Failed to delete PDP {pdp_id}. {remove_pdp.status_code} {remove_pdp.reason}')
-
-
-    def create_meta_string_from_dataframe(self, ds_name, ds_descr, dataframe):
-        """Create Columns type, name list for Domo Schema based on Dataframe dtypes."""
-        df_domo_types = {'object': "STRING", 'int64': "LONG", 'int32': "LONG",
-                         'float64': "DOUBLE", 'float32': "DOUBLE", 'float': "DOUBLE",
-                         'datetime64[ns]': "DATE", 'datetime64[ns, tz]': "DATETIME",
-                         'bool': "STRING"}
-
-        columns = []
-        for col in dataframe.columns:
-            col_type = df_domo_types.get(str(dataframe[col].dtype), "STRING")
-            columns.append({"type": col_type, "name": col})
-
-        meta_json_dict = {}
-        meta_json_dict['name'] = ds_name
-        meta_json_dict['description'] = ds_descr
-        meta_json_dict['rows'] = 0
-        meta_json_dict['schema'] = {"columns": columns}
-
-        return meta_json_dict
-
-    def create_meta_string_from_user_declared(self, ds_name, ds_descr, col_types_dict):
-        """Create metadata from user declared dict of key/value column/type pairs."""
-        # set of allowed data types for Domo Metadata
-        valid_domo_types = ["STRING", "DOUBLE", "DATE", "DATETIME", "LONG"]
-        #valid_domo_types = set(domo_types)
-        # types user passed in
-        types_for_dataset = set(col_types_dict.values())
-        # make sure user passed in types are valid Domo Metadata types.
-        for dtype in types_for_dataset:
-            if dtype not in valid_domo_types:
-                raise ValueError(
-                    f"{dtype} is not a valid datatype to use for creating a Domo Dataset")
-        # Create dict of meta for json req.
-        meta_json_dict = {}
-        meta_json_dict['name'] = ds_name
-        meta_json_dict['description'] = ds_descr
-        meta_json_dict['rows'] = 0
-        meta_json_dict['schema'] = {"columns": [
-            {"name": k, "type": v} for k, v in col_types_dict.items()]}
-
-        return meta_json_dict
-
-    def create_meta_string_from_json_data():
-        """Create metadata with data types infered from json."""
-        pass
 
     def create_pdp_req(self, pdp_name, filters, groups=[], users=[]):
         """Create pdp json req body."""
